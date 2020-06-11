@@ -10,10 +10,9 @@ import copy
 import time
 from random import sample as rsample
 from random import seed
-from torchtext.data import get_tokenizer
 from data_utils import load_task
 
-random_seed = 1
+random_seed = 2
 embedding_dim = 100
 n_memories = 20
 gradient_clip_value = 40
@@ -55,7 +54,7 @@ def get_vocab(train, test):
     vocab = set()
     samples = train + test
     for story, query, answer in samples:
-        for word in [word for sentence in story for word in sentence] + query:
+        for word in [word for sentence in story for word in sentence] + query + answer:
             vocab.add(word)
     vocab = list(vocab)
     vocab.sort()
@@ -118,14 +117,14 @@ def batch_generator(data, batch_size):
     len_data = len(vec_stories)
 
     perm = torch.randperm(len_data)
-    vec_stories, vec_queries, vec_answers = vec_stories[perm], vec_queries[perm], vec_answers[perm]
+    # vec_stories, vec_queries, vec_answers = vec_stories[perm], vec_queries[perm], vec_answers[perm]
     pos = 0
     while pos < len_data:
         if pos < len_data - batch_size:
-            yield vec_stories[pos:pos + batch_size], vec_queries[pos:pos + batch_size], vec_answers[pos:pos + batch_size]
+            yield vec_stories[perm[pos:pos + batch_size]], vec_queries[perm[pos:pos + batch_size]], vec_answers[perm[pos:pos + batch_size]]
             pos = pos + batch_size
         else:
-            return vec_stories[pos:], vec_queries[pos:], vec_answers[pos:]
+            return vec_stories[perm[pos:]], vec_queries[perm[pos:]], vec_answers[perm[pos:]]
 
 
 def get_key_tensors(vocab, embeddings_matrix, token_to_idx, device,  tied=True, learned=True):
@@ -187,6 +186,7 @@ class EntNet(nn.Module):
         # Encoder
         self.input_encoder_multiplier = nn.Parameter(torch.ones((len_max_sentence, embedding_dim), device=device)).to(device)
         self.query_encoder_multiplier = nn.Parameter(torch.ones((len_max_sentence, embedding_dim), device=device)).to(device)
+        # self.query_encoder_multiplier = self.input_encoder_multiplier
 
         # Memory
         self.keys = keys
@@ -202,7 +202,8 @@ class EntNet(nn.Module):
         self.W.weight = get_matrix_weights(device)
 
         self.in_non_linearity = get_non_linearity().to(device)
-        self.query_non_linearity = get_non_linearity().to(device)
+        # self.query_non_linearity = get_non_linearity().to(device)
+        self.query_non_linearity = self.in_non_linearity
 
         # Decoder
         self.R = nn.Linear(vocab_size, embedding_dim, bias=False).to(device)
@@ -336,6 +337,7 @@ def train(task, device):
         # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
 
         epoch += 1
+        return
 
     print('Finished Training')
 
