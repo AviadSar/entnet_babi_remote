@@ -105,7 +105,8 @@ def vectorize_data(data, token_to_idx, embeddings_matrix, len_max_sentence, len_
         vec_curr_query = embeddings_matrix(torch.tensor([token_to_idx[w] for w in query] + [0] * word_padding_size))
         vec_queries[i] = vec_curr_query
 
-        vec_answers[i] = torch.tensor(token_to_idx[answer[0]], requires_grad=False, dtype=torch.long)
+        # vec_answers[i] = torch.tensor(token_to_idx[answer[0]], requires_grad=False, dtype=torch.long)
+        vec_answers[i] = token_to_idx[answer[0]].clone().detach()
 
         i += 1
 
@@ -136,7 +137,8 @@ def get_key_tensors(vocab, embeddings_matrix, token_to_idx, device,  tied=True, 
         keys = torch.zeros((n_memories, embedding_dim), device=device)
         for i, word in enumerate(vocab):
             if i < n_memories:
-                keys[i] = embeddings_matrix(torch.tensor(token_to_idx[word], device=device))
+                # keys[i] = embeddings_matrix(torch.tensor(token_to_idx[word], device=device))
+                keys[i] = embeddings_matrix(token_to_idx[word].clone().detach().to(device))
         return nn.Parameter(keys, requires_grad=True).to(device) if learned else keys
 
     mean = torch.zeros((n_memories, embedding_dim), device=device)
@@ -212,7 +214,8 @@ class EntNet(nn.Module):
         self.H.weight = get_matrix_weights(device)
 
     def init_new_memories(self, device, batch_size):
-        self.memories = torch.tensor(self.keys, requires_grad=False, device=device).repeat(batch_size, 1, 1)
+        # self.memories = torch.tensor(self.keys, requires_grad=False, device=device).repeat(batch_size, 1, 1)
+        self.memories = self.keys.clone().detach().to(device).repeat(batch_size, 1, 1)
 
     def forward(self, batch):
 
@@ -272,20 +275,24 @@ def train(task, device):
 
     ##### Train Model #####
     epoch = 0
-    prev_loss = None
-    loss = None
-    stuck_epochs = 0
     max_stuck_epochs = 10
-    epsilon = 0.1
+    epsilon = 0.01
+    loss_history = [np.inf] * max_stuck_epochs
+
     while True:
+        epoch_loss = 0.0
         running_loss = 0.0
         correct = 0
         start_time = time.time()
         for i, batch in enumerate(batch_generator(vec_train, batch_size)):
             batch_stories, batch_queries, batch_answers = batch
-            batch_stories, batch_queries, batch_answers = torch.tensor(batch_stories, requires_grad=False, device=device),\
-                                                          torch.tensor(batch_queries, requires_grad=False, device=device),\
-                                                          torch.tensor(batch_answers, requires_grad=False, device=device)
+            # batch_stories, batch_queries, batch_answers = torch.tensor(batch_stories, requires_grad=False, device=device),\
+            #                                               torch.tensor(batch_queries, requires_grad=False, device=device),\
+            #                                               torch.tensor(batch_answers, requires_grad=False, device=device)
+
+            batch_stories, batch_queries, batch_answers = batch_stories.clone().detach().to(device), \
+                                                          batch_queries.clone().detach().to(device), \
+                                                          batch_answers.clone().detach().to(device)
 
             entnet(batch_stories)
             output = entnet.decode(batch_queries)
@@ -293,6 +300,7 @@ def train(task, device):
             loss.backward()
 
             running_loss += loss.item()
+            epoch_loss += loss.item()
 
             # nn.utils.clip_grad_value_(entnet.parameters(), gradient_clip_value)
             optimizer.step()
@@ -312,32 +320,33 @@ def train(task, device):
                 print('[%d, %5d] correct: %d out of %d' % (epoch + 1, i + 1, correct, 50 * batch_size))
                 correct = 0
 
+        # very loose approximation for the average loss over the epoch
+        epoch_loss = epoch_loss / (len(vec_train[0]) / batch_size)
         # print epoch time
         end_time = time.time()
         print("###################################################################################################")
         print(end_time - start_time)
+        print('epoch loss: %.3f' % epoch_loss)
         print("###################################################################################################")
 
-        if epoch == 0:
-            prev_loss = loss
-        elif prev_loss - loss < epsilon:
-            stuck_epochs += 1
-            prev_loss = loss
+        ##### Save Trained Model #####
+        # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
+        # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
 
-        if stuck_epochs > max_stuck_epochs:
+
+        loss_history.append(epoch_loss)
+        loss_history = loss_history[1:]
+        if loss_history[0] - min(loss_history[1:]) < epsilon:
             break
 
         # adjust learning rate every 25 epochs until 200 epochs
         if epoch < 200 and epoch % 25 == 24:
             learning_rate = learning_rate / 2
             optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
-
-        ##### Save Trained Model #####
-        # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
-        # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
+        if epoch == 200:
+            break
 
         epoch += 1
-        return
 
     print('Finished Training')
 
