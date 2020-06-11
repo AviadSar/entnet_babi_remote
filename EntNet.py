@@ -21,8 +21,8 @@ tie_keys = True
 learn_keys = True
 tasks = [1]
 data_dir = "data/tasks_1-20_v1-2/en-10k"
-STATE_PATH = './trained_models/task_{}/entnet_{}.pth'
-OPTIM_PATH = './trained_models/task_{}/optim_{}.pth'
+STATE_PATH = './trained_models/task_{}.pth'
+OPTIM_PATH = './trained_models/task_{}.pth'
 
 # for reproducibility
 torch.manual_seed(random_seed)
@@ -278,6 +278,8 @@ def train(task, device):
     max_stuck_epochs = 10
     epsilon = 0.01
     loss_history = [np.inf] * max_stuck_epochs
+    net_history = [None] * max_stuck_epochs
+    optim_history = [None] * max_stuck_epochs
 
     while True:
         epoch_loss = 0.0
@@ -333,10 +335,16 @@ def train(task, device):
         # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
         # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
 
+        net_history.append(entnet.state_dict())
+        optim_history.append(optimizer.state_dict())
+        net_history = net_history[1:]
+        optim_history = optim_history[1:]
 
         loss_history.append(epoch_loss)
         loss_history = loss_history[1:]
         if loss_history[0] - min(loss_history[1:]) < epsilon:
+            torch.save(net_history[-1], STATE_PATH.format(task))
+            torch.save(optim_history[-1], OPTIM_PATH.format(task))
             break
 
         # adjust learning rate every 25 epochs until 200 epochs
@@ -344,6 +352,8 @@ def train(task, device):
             learning_rate = learning_rate / 2
             optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
         if epoch == 200:
+            torch.save(net_history[-1], STATE_PATH.format(task))
+            torch.save(optim_history[-1], OPTIM_PATH.format(task))
             break
 
         epoch += 1
