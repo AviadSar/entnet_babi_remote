@@ -22,6 +22,8 @@ gradient_clip_value = 40
 batch_size = 32
 tie_keys = True
 learn_keys = True
+max_stuck_epochs = 6
+min_improvement = 0.001
 tasks = [1]
 data_dir = "data/tasks_1-20_v1-2/en-10k"
 STATE_PATH = './trained_models/task_{}.pth'
@@ -36,6 +38,8 @@ def print_start_train_message(task):
           "embedding dimension is {}\n".format(embedding_dim) +
           "number of memories is {}\n".format(n_memories) +
           "gradient clip value is {}\n".format(gradient_clip_value) +
+          "maximum stuck epochs is {}\n".format(max_stuck_epochs) +
+          "minimal improvement is {}\n".format(min_improvement) +
           "batch size is {}\n".format(batch_size) +
           "keys are {}\n".format(key_state_txt) +
           "keys are {}\n".format(key_learned_txt))
@@ -273,8 +277,6 @@ def train(task, device):
 
     ##### Train Model #####
     epoch = 0
-    max_stuck_epochs = 10
-    epsilon = 0.01
     loss_history = [np.inf] * max_stuck_epochs
     net_history = [None] * max_stuck_epochs
     optim_history = [None] * max_stuck_epochs
@@ -340,7 +342,7 @@ def train(task, device):
 
         loss_history.append(epoch_loss)
         loss_history = loss_history[1:]
-        if loss_history[0] - min(loss_history[1:]) < epsilon:
+        if loss_history[0] - min(loss_history[1:]) < min_improvement:
             torch.save(net_history[-1], STATE_PATH.format(task))
             torch.save(optim_history[-1], OPTIM_PATH.format(task))
             break
@@ -449,6 +451,20 @@ def main():
     )
 
     parser.add_argument(
+        "--max_stuck_epochs",
+        help="the maximal number of consecutive epochs the training is allowed to have no improvement, before it stops",
+        type=int,
+        default=6
+    )
+
+    parser.add_argument(
+        "--min_improvement",
+        help="the minimal improvement in score between 2 epoch so that they are'nt considered stuck",
+        type=int,
+        default=0.001
+    )
+
+    parser.add_argument(
         "--set_random_seed",
         help="the value of the random seed, if it should be set",
         type=int
@@ -507,12 +523,14 @@ def main():
     curr_dir = os.getcwd()
     args = parser.parse_args()
 
-    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed
+    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement, tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed
     verbose = args.verbose
     embedding_dim = args.embedding_dim
     n_memories = args.n_memories
     batch_size = args.batch_size
     gradient_clip_value = args.gradient_clip_value
+    max_stuck_epochs = args.max_stuck_epochs
+    min_improvement = args.min_improvement
     tie_keys = args.no_tie_keys
     learn_keys = args.no_learn_keys
     tasks = args.tasks
