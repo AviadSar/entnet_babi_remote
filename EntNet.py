@@ -11,7 +11,10 @@ import time
 from random import sample as rsample
 from random import seed
 from data_utils import load_task
+import argparse
+import os
 
+verbose = True
 random_seed = 2
 embedding_dim = 100
 n_memories = 20
@@ -23,11 +26,6 @@ tasks = [1]
 data_dir = "data/tasks_1-20_v1-2/en-10k"
 STATE_PATH = './trained_models/task_{}.pth'
 OPTIM_PATH = './trained_models/task_{}.pth'
-
-# for reproducibility
-torch.manual_seed(random_seed)
-np.random.seed(random_seed)
-seed(random_seed)
 
 
 def print_start_train_message(task):
@@ -406,13 +404,138 @@ def test(task):
               "finished testing\n")
 
 def main():
+
+    parser = argparse.ArgumentParser(description='Process some integers.')
+
+    parser.add_argument(
+        "--verbose",
+        help="increases the verbosity of the output",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        '--tasks',
+        type=int,
+        nargs='+',
+        default=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+        help='the tasks to learn')
+
+    parser.add_argument(
+        "--embedding_dim",
+        help="the dimension of the emmbeding space for the vocabulary",
+        type=int,
+        default=100
+    )
+
+    parser.add_argument(
+        "--n_memories",
+        help="the number of memories to keep in the net",
+        type=int,
+        default=20
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        help="the size of the mini-batches in the learning proccess",
+        type=int,
+        default=32
+    )
+
+    parser.add_argument(
+        "--gradient_clip_value",
+        help="the value at which to clip the gradients",
+        type=int,
+        default=40
+    )
+
+    parser.add_argument(
+        "--set_random_seed",
+        help="the value of the random seed, if it should be set",
+        type=int
+    )
+
+    parser.add_argument(
+        "--no_tie_keys",
+        help="sets the initial key values in the EntNet to random values, instead of tying them to the words in the vocabulary",
+        action="store_false"
+    )
+
+    parser.add_argument(
+        "--no_learn_keys",
+        help="disables the keys in the EntNet being learned as parameters",
+        action="store_false"
+    )
+
+    parser.add_argument(
+        "--state_path",
+        help="the path to load from or save to the EntNet",
+        type=str,
+        default="./trained_models/task_{}.pth"
+    )
+
+    parser.add_argument(
+        "--optim_path",
+        help="the path to load from or save to the optimizer of the EntNet",
+        type=str,
+        default="./trained_models/task_{}.pth"
+    )
+
+    parser.add_argument(
+        "--cpu",
+        help="trains the net on CPU",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--train",
+        help="trains the net",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--test",
+        help="tests the net",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--load_net",
+        help="used saved trained nets to test or complete training",
+        action="store_true"
+    )
+
+    curr_dir = os.getcwd()
+    args = parser.parse_args()
+
+    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed
+    verbose = args.verbose
+    embedding_dim = args.embedding_dim
+    n_memories = args.n_memories
+    batch_size = args.batch_size
+    gradient_clip_value = args.gradient_clip_value
+    tie_keys = args.no_tie_keys
+    learn_keys = args.no_learn_keys
+    tasks = args.tasks
+    STATE_PATH = args.state_path
+    OPTIM_PATH = args.optim_path
+
+    # for reproducibility
+    if args.set_random_seed:
+        torch.manual_seed(random_seed)
+        np.random.seed(random_seed)
+        seed(random_seed)
+    else:
+        random_seed = "not set"
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
+    if not args.cpu:
+        device = torch.device("cpu")
 
     for task in tasks:
-        train(task, device)
-    # for task in tasks:
-    #     test(task, device)
+        if args.train:
+            train(task, device)
+        if args.test:
+            test(task, device)
 
 
 if __name__ == "__main__":
