@@ -24,16 +24,20 @@ tie_keys = True
 learn_keys = True
 max_stuck_epochs = 6
 min_improvement = 0.001
+n_tries = 10
 tasks = [1]
 data_dir = "data/tasks_1-20_v1-2/en-10k"
 STATE_PATH = './trained_models/task_{}.pth'
 OPTIM_PATH = './trained_models/task_{}.pth'
+cuda = True
 
 
 def print_start_train_message(task):
     key_state_txt = "tied to vocab" if tie_keys else "NOT tied to vocab"
     key_learned_txt = "learned" if learn_keys else "NOT learned"
+    cuda_txt = "gpu" if cuda else "cpu"
     print("start learning task {}\n".format(task) +
+          "learning on {}\n".format(cuda_txt) +
           "random seed is {}\n".format(random_seed) +
           "embedding dimension is {}\n".format(embedding_dim) +
           "number of memories is {}\n".format(n_memories) +
@@ -257,106 +261,118 @@ def train(task, device):
 
     train, test = load_task(data_dir, task)
 
-    vocab, vocab_size = get_vocab(train, test)
-    cuda_embeddings_matrix, embeddings_matrix, token_to_idx = init_embedding_matrix(vocab, device)
-    keys = get_key_tensors(vocab, cuda_embeddings_matrix, token_to_idx, device, tie_keys, learn_keys)
+    models = [None] * n_tries
+    optims = [None] * n_tries
+    model_scores = [None] * n_tries
 
-    len_max_sentence, len_max_story = get_len_max_sentence_and_story(train + test)
-    vec_train = vectorize_data(train, token_to_idx, embeddings_matrix, len_max_sentence, len_max_story)
+    for try_idx in range(n_tries):
+        vocab, vocab_size = get_vocab(train, test)
+        cuda_embeddings_matrix, embeddings_matrix, token_to_idx = init_embedding_matrix(vocab, device)
+        keys = get_key_tensors(vocab, cuda_embeddings_matrix, token_to_idx, device, tie_keys, learn_keys)
 
-    entnet = EntNet(vocab_size, keys, len_max_sentence, device)
-    entnet.to(device)
-    entnet = entnet.float()
-    # entnet.load_state_dict(torch.load(STATE_PATH.format(task, 0)))
+        len_max_sentence, len_max_story = get_len_max_sentence_and_story(train + test)
+        vec_train = vectorize_data(train, token_to_idx, embeddings_matrix, len_max_sentence, len_max_story)
 
-    ##### Define Loss and Optimizer #####
-    criterion = nn.CrossEntropyLoss().to(device)
-    learning_rate = 0.01
-    optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
-    # optimizer.load_state_dict(torch.load(OPTIM_PATH.format(task, 0)))
+        entnet = EntNet(vocab_size, keys, len_max_sentence, device)
+        entnet.to(device)
+        entnet = entnet.float()
+        # entnet.load_state_dict(torch.load(STATE_PATH.format(task, 0)))
 
-    ##### Train Model #####
-    epoch = 0
-    loss_history = [np.inf] * max_stuck_epochs
-    net_history = [None] * max_stuck_epochs
-    optim_history = [None] * max_stuck_epochs
+        ##### Define Loss and Optimizer #####
+        criterion = nn.CrossEntropyLoss().to(device)
+        learning_rate = 0.01
+        optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
+        # optimizer.load_state_dict(torch.load(OPTIM_PATH.format(task, 0)))
 
-    while True:
-        epoch_loss = 0.0
-        running_loss = 0.0
-        correct = 0
-        start_time = time.time()
-        for i, batch in enumerate(batch_generator(vec_train, batch_size)):
-            batch_stories, batch_queries, batch_answers = batch
-            # batch_stories, batch_queries, batch_answers = torch.tensor(batch_stories, requires_grad=False, device=device),\
-            #                                               torch.tensor(batch_queries, requires_grad=False, device=device),\
-            #                                               torch.tensor(batch_answers, requires_grad=False, device=device)
+        ##### Train Model #####
+        epoch = 0
+        loss_history = [np.inf] * max_stuck_epochs
+        net_history = [None] * max_stuck_epochs
+        optim_history = [None] * max_stuck_epochs
 
-            batch_stories, batch_queries, batch_answers = batch_stories.clone().detach().to(device), \
-                                                          batch_queries.clone().detach().to(device), \
-                                                          batch_answers.clone().detach().to(device)
+        while True:
+            epoch_loss = 0.0
+            running_loss = 0.0
+            correct = 0
+            start_time = time.time()
+            for i, batch in enumerate(batch_generator(vec_train, batch_size)):
+                batch_stories, batch_queries, batch_answers = batch
+                # batch_stories, batch_queries, batch_answers = torch.tensor(batch_stories, requires_grad=False, device=device),\
+                #                                               torch.tensor(batch_queries, requires_grad=False, device=device),\
+                #                                               torch.tensor(batch_answers, requires_grad=False, device=device)
 
-            entnet(batch_stories)
-            output = entnet.decode(batch_queries)
-            loss = criterion(output, batch_answers)
-            loss.backward()
+                batch_stories, batch_queries, batch_answers = batch_stories.clone().detach().to(device), \
+                                                              batch_queries.clone().detach().to(device), \
+                                                              batch_answers.clone().detach().to(device)
 
-            running_loss += loss.item()
-            epoch_loss += loss.item()
+                entnet(batch_stories)
+                output = entnet.decode(batch_queries)
+                loss = criterion(output, batch_answers)
+                loss.backward()
 
-            # nn.utils.clip_grad_value_(entnet.parameters(), gradient_clip_value)
-            optimizer.step()
-            # zero the parameter gradients
-            optimizer.zero_grad()
+                running_loss += loss.item()
+                epoch_loss += loss.item()
 
-            pred_idx = np.argmax(output.cpu().detach().numpy(), axis=1)
-            for j in range(len(output)):
-                if pred_idx[j] == batch_answers[j].item():
-                    correct += 1
+                # nn.utils.clip_grad_value_(entnet.parameters(), gradient_clip_value)
+                optimizer.step()
+                # zero the parameter gradients
+                optimizer.zero_grad()
 
-            if i % 50 == 49:
-                # print statistics
-                print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 50))
-                running_loss = 0.0
+                pred_idx = np.argmax(output.cpu().detach().numpy(), axis=1)
+                for j in range(len(output)):
+                    if pred_idx[j] == batch_answers[j].item():
+                        correct += 1
 
-                print('[%d, %5d] correct: %d out of %d' % (epoch + 1, i + 1, correct, 50 * batch_size))
-                correct = 0
+                if i % 50 == 49:
+                    # print statistics
+                    print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 50))
+                    running_loss = 0.0
 
-        # very loose approximation for the average loss over the epoch
-        epoch_loss = epoch_loss / (len(vec_train[0]) / batch_size)
-        # print epoch time
-        end_time = time.time()
-        print("###################################################################################################")
-        print(end_time - start_time)
-        print('epoch loss: %.3f' % epoch_loss)
-        print("###################################################################################################")
+                    print('[%d, %5d] correct: %d out of %d' % (epoch + 1, i + 1, correct, 50 * batch_size))
+                    correct = 0
 
-        ##### Save Trained Model #####
-        # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
-        # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
+            # very loose approximation for the average loss over the epoch
+            epoch_loss = epoch_loss / (len(vec_train[0]) / batch_size)
+            # print epoch time
+            end_time = time.time()
+            print("###################################################################################################")
+            print(end_time - start_time)
+            print('epoch loss: %.3f' % epoch_loss)
+            print("###################################################################################################")
 
-        net_history.append(entnet.state_dict())
-        optim_history.append(optimizer.state_dict())
-        net_history = net_history[1:]
-        optim_history = optim_history[1:]
+            ##### Save Trained Model #####
+            # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
+            # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
 
-        loss_history.append(epoch_loss)
-        loss_history = loss_history[1:]
-        if loss_history[0] - min(loss_history[1:]) < min_improvement:
-            torch.save(net_history[-1], STATE_PATH.format(task))
-            torch.save(optim_history[-1], OPTIM_PATH.format(task))
-            break
+            net_history.append(entnet.state_dict())
+            optim_history.append(optimizer.state_dict())
+            loss_history.append(epoch_loss)
 
-        # adjust learning rate every 25 epochs until 200 epochs
-        if epoch < 200 and epoch % 25 == 24:
-            learning_rate = learning_rate / 2
-            optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
-        if epoch == 200:
-            torch.save(net_history[-1], STATE_PATH.format(task))
-            torch.save(optim_history[-1], OPTIM_PATH.format(task))
-            break
+            net_history = net_history[1:]
+            optim_history = optim_history[1:]
+            loss_history = loss_history[1:]
 
-        epoch += 1
+            if loss_history[0] - min(loss_history[1:]) < min_improvement:
+                models[try_idx] = net_history[-1]
+                optims[try_idx] = optim_history[-1]
+                model_scores[try_idx] = loss_history[-1]
+                break
+
+            # adjust learning rate every 25 epochs until 200 epochs
+            if epoch < 200 and epoch % 25 == 24:
+                learning_rate = learning_rate / 2
+                optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
+            if epoch == 200:
+                models[try_idx] = net_history[-1]
+                optims[try_idx] = optim_history[-1]
+                model_scores[try_idx] = loss_history[-1]
+                break
+
+            epoch += 1
+
+    best_idx = np.argmin(model_scores)
+    torch.save(models[best_idx], STATE_PATH.format(task))
+    torch.save(optims[best_idx], OPTIM_PATH.format(task))
 
     print('Finished Training')
 
@@ -460,7 +476,7 @@ def main():
     parser.add_argument(
         "--min_improvement",
         help="the minimal improvement in score between 2 epoch so that they are'nt considered stuck",
-        type=int,
+        type=float,
         default=0.001
     )
 
@@ -520,10 +536,19 @@ def main():
         action="store_true"
     )
 
+    parser.add_argument(
+        "--n_tries",
+        help="the number of time the net is trained on each task. the try with the maximal results is chosen and saved",
+        type=int,
+        default=10
+    )
+
     curr_dir = os.getcwd()
     args = parser.parse_args()
 
-    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement, tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed
+    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement,\
+        tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed, n_tries, cuda
+
     verbose = args.verbose
     embedding_dim = args.embedding_dim
     n_memories = args.n_memories
@@ -536,6 +561,7 @@ def main():
     tasks = args.tasks
     STATE_PATH = args.state_path
     OPTIM_PATH = args.optim_path
+    n_tries = args.n_tries
 
     # for reproducibility
     if args.set_random_seed:
@@ -546,8 +572,9 @@ def main():
         random_seed = "not set"
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if not args.cpu:
+    if args.cpu:
         device = torch.device("cpu")
+        cuda = False
 
     for task in tasks:
         if args.train:
