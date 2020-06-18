@@ -509,7 +509,7 @@ def main():
         "--optim_path",
         help="the path to load from or save to the optimizer of the EntNet",
         type=str,
-        default="./trained_models/task_{}.pth"
+        default="./trained_models/optim_{}.pth"
     )
 
     parser.add_argument(
