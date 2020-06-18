@@ -14,7 +14,7 @@ from data_utils import load_task
 import argparse
 import os
 
-verbose = True
+no_verbose = False
 random_seed = 2
 embedding_dim = 100
 n_memories = 20
@@ -426,7 +426,7 @@ def main():
     parser = argparse.ArgumentParser(description='Process some integers.')
 
     parser.add_argument(
-        "--verbose",
+        "--no_verbose",
         help="increases the verbosity of the output",
         action="store_true"
     )
@@ -546,10 +546,10 @@ def main():
     curr_dir = os.getcwd()
     args = parser.parse_args()
 
-    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement,\
+    global no_verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement,\
         tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed, n_tries, cuda
 
-    verbose = args.verbose
+    no_verbose = args.no_verbose
     embedding_dim = args.embedding_dim
     n_memories = args.n_memories
     batch_size = args.batch_size
