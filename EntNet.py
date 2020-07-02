@@ -14,7 +14,7 @@ from data_utils import load_task
 import argparse
 import os
 
-no_verbose = False
+verbose = False
 random_seed = 2
 embedding_dim = 100
 n_memories = 20
@@ -36,6 +36,7 @@ def print_start_train_message(task):
     key_state_txt = "tied to vocab" if tie_keys else "NOT tied to vocab"
     key_learned_txt = "learned" if learn_keys else "NOT learned"
     cuda_txt = "gpu" if cuda else "cpu"
+    verbose_text = "verbose" if verbose else "non-verbose"
     print("start learning task {}\n".format(task) +
           "learning on {}\n".format(cuda_txt) +
           "random seed is {}\n".format(random_seed) +
@@ -46,14 +47,16 @@ def print_start_train_message(task):
           "minimal improvement is {}\n".format(min_improvement) +
           "batch size is {}\n".format(batch_size) +
           "keys are {}\n".format(key_state_txt) +
-          "keys are {}\n".format(key_learned_txt))
+          "keys are {}\n".format(key_learned_txt) +
+          "{} mode\n".format(verbose_text))
 
 
 def print_start_test_message(task):
-    print("testing task {}\n".format(task) +
-          "random seed is {}\n".format(random_seed) +
-          "embedding dimension is {}\n".format(embedding_dim) +
-          "number of memories is {}\n".format(n_memories))
+    print("testing task {}\n".format(task))
+    if verbose:
+        print("random seed is {}\n".format(random_seed) +
+              "embedding dimension is {}\n".format(embedding_dim) +
+              "number of memories is {}\n".format(n_memories))
 
 
 def get_vocab(train, test):
@@ -131,7 +134,8 @@ def batch_generator(data, batch_size):
             yield vec_stories[perm[pos:pos + batch_size]], vec_queries[perm[pos:pos + batch_size]], vec_answers[perm[pos:pos + batch_size]]
             pos = pos + batch_size
         else:
-            return vec_stories[perm[pos:]], vec_queries[perm[pos:]], vec_answers[perm[pos:]]
+            yield vec_stories[perm[pos:]], vec_queries[perm[pos:]], vec_answers[perm[pos:]]
+            return
 
 
 def get_key_tensors(vocab, embeddings_matrix, token_to_idx, device,  tied=True, learned=True):
@@ -235,7 +239,7 @@ class EntNet(nn.Module):
         # Memory
         for sentence_idx in range(batch.shape[1]):
             sentence = batch[:, sentence_idx]
-            sentence_memory_repeat = sentence.repeat(1, n_memories).view(batch_size, n_memories, -1)
+            sentence_memory_repeat = sentence.repeat(1, n_memories).view(len(batch), n_memories, -1)
 
             memory_gate = (sentence * self.memories.permute(1, 0, 2)).permute(1, 0, 2).sum(dim=2)
             key_gate = (sentence_memory_repeat * self.keys).sum(dim=2)
@@ -263,7 +267,8 @@ def train(task, device):
 
     models = [None] * n_tries
     optims = [None] * n_tries
-    model_scores = [None] * n_tries
+    model_scores = [np.inf] * n_tries
+    model_correct_scores = [0] * n_tries
 
     for try_idx in range(n_tries):
         vocab, vocab_size = get_vocab(train, test)
@@ -287,13 +292,15 @@ def train(task, device):
         ##### Train Model #####
         epoch = 0
         loss_history = [np.inf] * max_stuck_epochs
+        correct_history = [0] * max_stuck_epochs
         net_history = [None] * max_stuck_epochs
         optim_history = [None] * max_stuck_epochs
 
         while True:
             epoch_loss = 0.0
             running_loss = 0.0
-            correct = 0
+            correct_batch = 0
+            correct_epoch = 0
             start_time = time.time()
             for i, batch in enumerate(batch_generator(vec_train, batch_size)):
                 batch_stories, batch_queries, batch_answers = batch
@@ -321,41 +328,44 @@ def train(task, device):
                 pred_idx = np.argmax(output.cpu().detach().numpy(), axis=1)
                 for j in range(len(output)):
                     if pred_idx[j] == batch_answers[j].item():
-                        correct += 1
+                        correct_batch += 1
+                        correct_epoch += 1
 
-                if i % 50 == 49:
-                    # print statistics
-                    print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 50))
-                    running_loss = 0.0
+                if verbose:
+                    if i % 50 == 49:
+                        # print statistics
+                        print('[%d, %5d] loss: %.3f' % (epoch + 1, i + 1, running_loss / 50))
+                        running_loss = 0.0
 
-                    print('[%d, %5d] correct: %d out of %d' % (epoch + 1, i + 1, correct, 50 * batch_size))
-                    correct = 0
+                        print('[%d, %5d] correct: %d out of %d' % (epoch + 1, i + 1, correct_batch, 50 * batch_size))
+                        correct_batch = 0
 
             # very loose approximation for the average loss over the epoch
             epoch_loss = epoch_loss / (len(vec_train[0]) / batch_size)
             # print epoch time
             end_time = time.time()
-            print("###################################################################################################")
-            print(end_time - start_time)
-            print('epoch loss: %.3f' % epoch_loss)
-            print("###################################################################################################")
-
-            ##### Save Trained Model #####
-            # torch.save(entnet.state_dict(), STATE_PATH.format(task, epoch))
-            # torch.save(optimizer.state_dict(), OPTIM_PATH.format(task, epoch))
+            if verbose:
+                print("###################################################################################################")
+                print(end_time - start_time)
+                print('epoch loss: %.3f' % epoch_loss)
+                print("###################################################################################################")
 
             net_history.append(entnet.state_dict())
             optim_history.append(optimizer.state_dict())
             loss_history.append(epoch_loss)
+            correct_history.append(correct_epoch)
 
             net_history = net_history[1:]
             optim_history = optim_history[1:]
             loss_history = loss_history[1:]
+            correct_history = correct_history[1:]
 
             if loss_history[0] - min(loss_history[1:]) < min_improvement:
-                models[try_idx] = net_history[-1]
-                optims[try_idx] = optim_history[-1]
-                model_scores[try_idx] = loss_history[-1]
+                best_idx = np.argmin(loss_history)
+                models[try_idx] = net_history[best_idx]
+                optims[try_idx] = optim_history[best_idx]
+                model_scores[try_idx] = loss_history[best_idx]
+                model_correct_scores[try_idx] = correct_history[best_idx]
                 break
 
             # adjust learning rate every 25 epochs until 200 epochs
@@ -363,18 +373,26 @@ def train(task, device):
                 learning_rate = learning_rate / 2
                 optimizer = optim.Adam(entnet.parameters(), lr=learning_rate)
             if epoch == 200:
-                models[try_idx] = net_history[-1]
-                optims[try_idx] = optim_history[-1]
-                model_scores[try_idx] = loss_history[-1]
+                best_idx = np.argmin(loss_history)
+                models[try_idx] = net_history[best_idx]
+                optims[try_idx] = optim_history[best_idx]
+                model_scores[try_idx] = loss_history[best_idx]
+                model_correct_scores[try_idx] = correct_history[best_idx]
                 break
 
             epoch += 1
+
+        if model_correct_scores[try_idx] == len(vec_train[0]):
+            break
 
     best_idx = np.argmin(model_scores)
     torch.save(models[best_idx], STATE_PATH.format(task))
     torch.save(optims[best_idx], OPTIM_PATH.format(task))
 
-    print('Finished Training')
+    print("Finished Training task {}\n".format(task) +
+          "try {} was best\n".format(best_idx) +
+          "loss is: {}\n".format(model_scores[best_idx]) +
+          "correct: {} out of {}\n".format(model_correct_scores[best_idx], len(vec_train[0])))
 
 
 def test(task):
@@ -426,7 +444,7 @@ def main():
     parser = argparse.ArgumentParser(description='Process some integers.')
 
     parser.add_argument(
-        "--no_verbose",
+        "--verbose",
         help="increases the verbosity of the output",
         action="store_true"
     )
@@ -481,7 +499,7 @@ def main():
     )
 
     parser.add_argument(
-        "--set_random_seed",
+        "--random_seed",
         help="the value of the random seed, if it should be set",
         type=int
     )
@@ -489,13 +507,13 @@ def main():
     parser.add_argument(
         "--no_tie_keys",
         help="sets the initial key values in the EntNet to random values, instead of tying them to the words in the vocabulary",
-        action="store_false"
+        action="store_true"
     )
 
     parser.add_argument(
         "--no_learn_keys",
         help="disables the keys in the EntNet being learned as parameters",
-        action="store_false"
+        action="store_true"
     )
 
     parser.add_argument(
@@ -546,28 +564,29 @@ def main():
     curr_dir = os.getcwd()
     args = parser.parse_args()
 
-    global no_verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement,\
+    global verbose, embedding_dim, n_memories, batch_size, gradient_clip_value, max_stuck_epochs, min_improvement,\
         tie_keys, learn_keys, STATE_PATH, OPTIM_PATH, random_seed, n_tries, cuda
 
-    no_verbose = args.no_verbose
+    verbose = args.verbose
     embedding_dim = args.embedding_dim
     n_memories = args.n_memories
     batch_size = args.batch_size
     gradient_clip_value = args.gradient_clip_value
     max_stuck_epochs = args.max_stuck_epochs
     min_improvement = args.min_improvement
-    tie_keys = args.no_tie_keys
-    learn_keys = args.no_learn_keys
+    tie_keys = not args.no_tie_keys
+    learn_keys = not args.no_learn_keys
     tasks = args.tasks
     STATE_PATH = args.state_path
     OPTIM_PATH = args.optim_path
     n_tries = args.n_tries
 
     # for reproducibility
-    if args.set_random_seed:
-        torch.manual_seed(random_seed)
-        np.random.seed(random_seed)
-        seed(random_seed)
+    if args.random_seed:
+        random_seed = args.random_seed
+        torch.manual_seed(args.random_seed)
+        np.random.seed(args.random_seed)
+        seed(args.random_seed)
     else:
         random_seed = "not set"
 
