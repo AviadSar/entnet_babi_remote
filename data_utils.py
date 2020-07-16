@@ -22,13 +22,36 @@ def load_task(data_dir, task_id, only_supporting=False):
     return train_data, test_data
 
 
+def get_tokenized_text(data_dir, task_id):
+    assert task_id > 0 and task_id < 21
+    files = os.listdir(data_dir)
+    files = [os.path.join(data_dir, f) for f in files]
+    s = "qa{}_".format(task_id)
+    train_file = [f for f in files if s in f and 'train' in f][0]
+    test_file = [f for f in files if s in f and 'test' in f][0]
+
+    train_text, test_text = "", ""
+    with open(train_file) as train_file:
+        lines = train_file.readlines()
+        for line in lines:
+            train_text += line;
+        train_text = str.lower(train_text)
+        train_text = tokenize(train_text)
+    with open(test_file) as test_file:
+        lines = test_file.readlines()
+        for line in lines:
+            test_text += line;
+        test_text = str.lower(test_text)
+        test_text = tokenize(test_text)
+
+    return train_text + test_text
+
 def tokenize(sent):
     """
     Return the tokens of a sentence including punctuation.
     >>> tokenize('Bob dropped the apple. Where is the apple?')
     ['Bob', 'dropped', 'the', 'apple', '.', 'Where', 'is', 'the', 'apple', '?']
     """
-    # i did some fix here. omri.
     return [x.strip() for x in re.split("(\W+)", sent) if x.strip()]
 
 
