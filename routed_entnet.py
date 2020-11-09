@@ -18,7 +18,7 @@ import os
 verbose = False
 random_seed = 2
 embedding_dim = 100
-n_memories = 20
+n_memories = 7
 gradient_clip_value = 40
 batch_size = 32
 tie_keys = True
@@ -253,6 +253,17 @@ def get_key_tensors(entities, embeddings_matrix, token_to_idx, device,  tied=Tru
     return nn.Parameter(keys, requires_grad=False).to(device)
 
 
+def get_sentinel_weights(x_dim, y_dim, device):
+    """
+    :return: initial weights for any og the matrices U, V, W
+     weights may be randomly initialized (current version) or initialized to zeros or the identity matrix
+    """
+    init_mean = torch.zeros((x_dim, y_dim), device=device)
+    init_standard_deviation = torch.full((x_dim, y_dim), 0.1, device=device)
+
+    return nn.Parameter(torch.normal(init_mean, init_standard_deviation), requires_grad=True).to(device)
+
+
 def get_matrix_weights(device):
     """
     :return: initial weights for any og the matrices U, V, W
@@ -284,7 +295,33 @@ def get_non_linearity():
     return nn.PReLU(init=1)
 
 
-# batch training
+class Sentinel(nn.module):
+    def __init__(self, vocab_size, len_max_sentence, embeddings_matrix, device):
+        super(Sentinel, self).__init__()
+
+        self.len_max_sentence = len_max_sentence
+        self.device = device
+
+        # embedding
+        self.embedding_matrix = embeddings_matrix
+
+        # Encoder
+        self.input_encoder_multiplier = nn.Parameter(torch.ones((len_max_sentence, embedding_dim), device=device), requires_grad=True).to(device)
+        # self.query_encoder_multiplier = nn.Parameter(torch.ones((len_max_sentence, embedding_dim), device=device), requires_grad=True).to(device)
+        self.query_encoder_multiplier = self.input_encoder_multiplier
+
+        num_routes = 3
+        self.U = nn.Linear(embedding_dim, num_routes, bias=False).to(device)
+        self.U.weight = get_sentinel_weights(embedding_dim, num_routes, device)
+
+        self.non_linearity = get_non_linearity().to(device)
+
+    def forward(self, batch):
+        batch = self.embedding_matrix(batch)
+        if (not learn_keys) and tie_keys:
+            self.embedded_keys = nn.Parameter(self.embedding_matrix(self.keys))
+
+
 class EntNet(nn.Module):
     def __init__(self, vocab_size, keys, len_max_sentence, embeddings_matrix, device):
         super(EntNet, self).__init__()
@@ -389,6 +426,8 @@ def train(tasks, vocab_tasks, device, mix=False, name=None):
         task = tasks[0]
         train, test = load_task(data_dir, task)
 
+    # TODO: separate some of the train set to be labeled by special function. label it.
+
     vocab, vocab_size, entities = get_vocab_and_entities(vocab_tasks)
 
     data = train + test
@@ -420,6 +459,8 @@ def train(tasks, vocab_tasks, device, mix=False, name=None):
         # vec_train = vectorize_data(train, token_to_idx, len_max_sentence, len_max_story)
         vec_train = indexize_data(train, token_to_idx, len_max_sentence)
         vec_test = indexize_data(test, token_to_idx, len_max_sentence)
+
+        # TODO: create tiny sentinel net. wrap it together with entnet as 1 net, but also keep access to sentinel
 
         entnet = EntNet(vocab_size, keys, len_max_sentence, embeddings_matrix, device)
         entnet.to(device)

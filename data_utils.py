@@ -11,7 +11,7 @@ def load_task(data_dir, task_id, only_supporting=False):
     Load the nth task. There are 20 tasks in total.
     Returns a tuple containing the training and testing data for the task.
     """
-    assert task_id > 0 and task_id < 21
+    # assert task_id > 0 and task_id < 21
     files = os.listdir(data_dir)
     files = [os.path.join(data_dir, f) for f in files]
     s = "qa{}_".format(task_id)
@@ -23,7 +23,7 @@ def load_task(data_dir, task_id, only_supporting=False):
 
 
 def get_tokenized_text(data_dir, task_id):
-    assert task_id > 0 and task_id < 21
+    # assert task_id > 0 and task_id < 21
     files = os.listdir(data_dir)
     files = [os.path.join(data_dir, f) for f in files]
     s = "qa{}_".format(task_id)
